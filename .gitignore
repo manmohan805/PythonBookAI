@@ -1,0 +1,35 @@
+﻿# Python cache files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+
+# Virtual environments
+.venv/
+.venv-1/
+venv/
+env/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Generated embeddings and indexes
+data/index/
+*.npy
+*.pkl
+*.pickle
+
+# PDF books and uploaded files
+data/books/
+uploads/
+*.pdf
+
+# Downloaded models and caches
+.cache/
+huggingface_cache/
+models/
+
+# Logs
+*.log

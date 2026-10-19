@@ -2,134 +2,295 @@ from config import TOP_K
 from vector_store import search
 from ollama_client import generate
 from reranker import rerank
+from code_validator import validate_code
 
 
 SYSTEM_RULES = """
-You are Python Book AI, a careful Python programming tutor.
+You are PythonBookAI, a careful Python programming tutor.
 
-Your job is to answer questions using the supplied book context.
+Your primary source is the supplied context from the user's Python
+book. Answer using the context and do not invent book citations.
 
-IMPORTANT RULES:
+==================== CORE RULES ====================
 
-1. Use the supplied context as the primary source of truth.
+1. ANSWER THE EXACT QUESTION
 
-2. Do not invent information that is not supported by the context.
+Answer the question directly. Keep simple questions concise.
+Do not introduce unrelated advanced topics.
 
-3. If the context does not contain enough information, say:
-   "The provided Python book does not contain enough information
-   to answer this confidently."
+2. USE THE RETRIEVED CONTEXT
 
-4. Separate facts from examples.
+Use the supplied book passages as your primary source.
 
-5. When giving Python code examples:
-   - Make sure the code is logically correct.
-   - Do not change the meaning of examples from the source.
-   - Do not invent output values.
+If the context does not support a confident answer, clearly state
+that the retrieved book passages do not contain enough information.
 
-6. Be especially careful with:
-   - operator precedence
-   - mutable vs immutable objects
-   - references
-   - equality vs identity
-   - exceptions
-   - class inheritance
+You may explain basic Python concepts when needed to make an answer
+understandable, but do not falsely attribute unsupported details
+to the book.
 
-7. Answer the exact question first.
-   Do not focus on a related advanced topic unless it helps answer
-   the question.
+3. USE CLEAR FORMATTING
 
-8. Keep explanations clear and beginner-friendly.
+Write natural, readable Markdown.
 
-9. If the question asks for a definition, give the definition first,
-   then explanation, then an example.
+For a simple question, use this structure when appropriate:
 
-10. At the end provide Sources using the exact filename and page
-    numbers supplied in the context.
+### Direct answer
+Give the definition or direct answer.
 
-11. Never write "BookName.pdf".
+### Explanation
+Briefly explain the concept.
 
-12. Never claim that a source says something unless that information
-    appears in the supplied context.
+### Python example
+Provide a short example when useful.
+
+### Sources
+List only the supplied source identifiers and page numbers that
+actually support the answer.
+
+Do not print empty headings or numbered placeholders.
+Do not write literal escape sequences such as \\*\\* when normal
+Markdown formatting is intended.
+Do not repeat the question unnecessarily.
+
+4. PYTHON CODE CORRECTNESS
+
+Before presenting code, check:
+- Python 3 syntax
+- variable types
+- expected output
+- mutability
+- equality versus identity
+- exception behavior
+- whether every operation is valid for the object
+
+Do not claim to have executed code unless it was actually executed.
+
+If an output is uncertain, explain the uncertainty rather than
+inventing a definite result.
+
+5. EQUALITY AND IDENTITY
+
+The == operator compares values for equality.
+The is operator checks whether two references point to the same
+object.
+
+When teaching this distinction, prefer:
+
+a = [1, 2, 3]
+b = [1, 2, 3]
+
+print(a == b)  # True
+print(a is b)  # False
+
+c = a
+
+print(a == c)  # True
+print(a is c)  # True
+
+Do not rely on string interning to demonstrate object identity.
+Do not claim that identical string literals must be separate
+objects.
+
+6. MUTABILITY
+
+Lists are mutable. Tuples cannot have their elements reassigned
+after creation.
+
+Do not demonstrate tuple immutability by implying that every
+object contained inside a tuple must itself be immutable.
+
+7. PYTHON 3
+
+Prefer Python 3 syntax and behavior.
+
+Do not present Python 2 output such as <type 'tuple'> as Python 3
+output.
+
+8. SOURCE CITATIONS
+
+Each context passage is labelled [SOURCE N] and includes a
+filename, page number, and content.
+
+Cite sources using the identifiers and page numbers supplied
+in the context, for example:
+
+- pythonbook1.pdf, page 40
+
+Only cite a source if its passage supports the answer.
+Never invent a filename, section title, or page number.
+
+Retrieved passages are not automatically proof that every claim
+in them is correct. Use careful judgment when explaining them.
+
+9. CONCISE ANSWERS
+
+For straightforward questions, prefer a short explanation and a
+small, relevant example. Expand only when the question requires it.
+
+==================== FINAL SELF-CHECK ====================
+
+Before answering, check:
+- Did I answer the exact question?
+- Is the explanation clear?
+- Is the code valid Python 3?
+- Is the expected output justified?
+- Did I avoid unreliable identity examples?
+- Are the citations drawn from the supplied context?
+- Did I remove empty sections and placeholders?
 """
 
 
-def answer_question(question: str, top_k=TOP_K):
+def empty_validation():
+    """Return a consistent validation result when no answer is generated."""
+    return {
+        "has_code": False,
+        "valid": True,
+        "errors": [],
+        "warnings": [],
+        "code_blocks": []
+    }
 
-    # Step 1: Search the vector database
-    # Retrieve more candidates first
+
+def answer_question(
+    question: str,
+    top_k=TOP_K,
+    source: str | None = None
+):
+    """
+    Run the complete retrieval-augmented generation pipeline.
+
+    Steps:
+    1. Retrieve candidate passages.
+    2. Rerank candidates.
+    3. Build a context containing source metadata.
+    4. Generate an answer using Ollama.
+    5. Validate code blocks in the answer.
+    6. Return the answer, sources, and validation results.
+    """
+
+    question = question.strip()
+
+    if not question:
+        return {
+            "answer": "Please enter a question.",
+            "sources": [],
+            "code_validation": empty_validation()
+        }
+
+    # STEP 1: RETRIEVE CANDIDATES
+
     candidates = search(
         question,
-        top_k=30
+        top_k=30,
+        source=source
     )
 
-    # Step 2: Rerank the candidates
+    if not candidates:
+        return {
+            "answer": (
+                "I could not find relevant information in the "
+                "indexed Python book."
+            ),
+            "sources": [],
+            "code_validation": empty_validation()
+        }
+
+    # STEP 2: RERANK CANDIDATES
+
     results = rerank(
         question,
         candidates,
         top_k=top_k
     )
 
-    # Step 3: Build context
-    context_parts = []
+    if not results:
+        return {
+            "answer": (
+                "I could not find sufficiently relevant information "
+                "in the indexed Python book."
+            ),
+            "sources": [],
+            "code_validation": empty_validation()
+        }
 
-    for i, item in enumerate(results, start=1):
+    # STEP 3: BUILD CONTEXT
+
+    context_parts = []
+    selected_sources = []
+    seen_pages = set()
+
+    for item in results:
+        filename = item.get("source", "Unknown")
+        page = item.get("page", "Unknown")
+
+        # Avoid duplicate passages from the same book and page.
+        page_key = (filename, page)
+
+        if page_key in seen_pages:
+            continue
+
+        seen_pages.add(page_key)
+        selected_sources.append(item)
+
+        source_number = len(selected_sources)
 
         context_parts.append(
-            f"""
-[SOURCE {i}]
-
-Book:
-{item['source']}
-
-Page:
-{item['page']}
-
-Content:
-{item['text']}
-"""
+            f"[SOURCE {source_number}]\n"
+            f"Filename: {filename}\n"
+            f"Page: {page}\n"
+            f"Content:\n{item.get('text', '')}"
         )
 
     context = "\n\n".join(context_parts)
 
-    # Step 4: Create prompt for Ollama
+    # STEP 4: BUILD THE PROMPT
+
     prompt = f"""
 {SYSTEM_RULES}
 
-================ CONTEXT ================
+================ RETRIEVED BOOK CONTEXT ================
 
 {context}
 
-================ QUESTION ================
+================ USER QUESTION ================
 
 {question}
 
-================ INSTRUCTIONS ================
+================ INSTRUCTIONS FOR THIS ANSWER ================
 
-Answer the question using the supplied context.
+Answer the user's question directly.
 
-Structure your answer as:
+Use relevant retrieved passages as the primary source.
+Do not cite a source unless its content supports the answer.
+Use concise Markdown with headings only when useful.
 
-1. Direct answer
-2. Explanation
-3. Python example, if useful
-4. Sources
+If you provide Python code, make sure the example is relevant,
+the syntax is valid for Python 3, and the stated output is correct.
 
-Before giving any Python example, mentally verify:
-- syntax
-- operator precedence
-- expected output
-- consistency with the explanation
+Do not include empty headings, template placeholders, or
+unnecessary introductory text.
 
-Do not invent source information.
-
-Sources must use the exact filename and page number
-from the supplied context.
+Return the answer only.
 """
 
-    # Step 5: Ask Ollama
+    # STEP 5: GENERATE THE ANSWER
+
     answer = generate(prompt)
 
+    if not isinstance(answer, str) or not answer.strip():
+        raise RuntimeError(
+            "Ollama returned an empty answer. Please try again."
+        )
+
+    # STEP 6: VALIDATE PYTHON CODE
+
+    code_validation = validate_code(answer)
+
+    # STEP 7: RETURN RESULTS
+
     return {
-        "answer": answer,
-        "sources": results
+        "answer": answer.strip(),
+        "sources": selected_sources,
+        "code_validation": code_validation
     }

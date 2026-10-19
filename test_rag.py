@@ -40,7 +40,25 @@ print("AI ANSWER")
 print("=" * 80)
 
 print(result["answer"])
+print("\n" + "=" * 80)
+print("CODE VALIDATION")
+print("=" * 80)
 
+validation = result.get("code_validation", {})
+
+print("Has code:")
+print(validation.get("has_code"))
+
+print("\nValid:")
+print(validation.get("valid"))
+
+print("\nErrors:")
+for error in validation.get("errors", []):
+    print("-", error)
+
+print("\nWarnings:")
+for warning in validation.get("warnings", []):
+    print("-", warning)
 
 # ============================================================
 # RETRIEVED SOURCES

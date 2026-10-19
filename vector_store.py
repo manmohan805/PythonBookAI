@@ -53,9 +53,23 @@ def load_index():
 
 # ---------------------------------------------------------
 # TOKENIZATION
-# ---------------------------------------------------------
-
 def tokenize(text: str) -> set[str]:
+    """Tokenize text and remove common words that add little search value."""
+
+    stop_words = {
+        "a", "an", "the",
+        "is", "are", "was", "were",
+        "what", "which", "who", "whom",
+        "how", "when", "where", "why",
+        "do", "does", "did",
+        "can", "could", "would", "should",
+        "i", "you", "we", "they", "he", "she", "it",
+        "me", "my", "your", "our", "their",
+        "in", "on", "at", "to", "of", "for",
+        "and", "or", "but", "with", "from",
+        "about", "explain", "describe", "tell",
+        "please", "give", "show"
+    }
 
     words = re.findall(
         r"[A-Za-z_][A-Za-z0-9_]*",
@@ -65,20 +79,16 @@ def tokenize(text: str) -> set[str]:
     normalized = set()
 
     for word in words:
+        if word in stop_words:
+            continue
 
-        # Normalize simple plurals:
-        # operators -> operator
-        # lists -> list
-        # functions -> function
-
+        # Normalize simple plurals.
         if word.endswith("s") and len(word) > 3:
             word = word[:-1]
 
         normalized.add(word)
 
     return normalized
-
-
 # ---------------------------------------------------------
 # KEYWORD SCORE
 # ---------------------------------------------------------
@@ -116,7 +126,7 @@ def is_duplicate(result: dict, selected: list[dict]) -> bool:
 # HYBRID SEARCH
 # ---------------------------------------------------------
 
-def search(query: str, top_k=5):
+def search(query: str, top_k=5, source: str | None = None):
 
     embeddings, metadata = load_index()
 
@@ -135,7 +145,8 @@ def search(query: str, top_k=5):
     candidates = []
 
     for index, item in enumerate(metadata):
-
+        if source is not None and item.get("source") != source:
+            continue
         semantic_score = float(
             semantic_scores[index]
         )
